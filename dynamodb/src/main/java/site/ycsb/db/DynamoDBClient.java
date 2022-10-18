@@ -26,7 +26,10 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClientBuilder;
 import software.amazon.awssdk.services.dynamodb.model.*;
+import software.amazon.dax.ClusterDaxClient;
+import software.amazon.dax.Configuration;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.*;
 import java.util.Map.Entry;
@@ -121,28 +124,42 @@ public class DynamoDBClient extends DB {
     if (dynamoDbClient == null) {
       synchronized (DynamoDbClient.class) {
         if (dynamoDbClient == null) {
-          DynamoDbClientBuilder dynamoDbClientBuilder = DynamoDbClient.builder();
+          String daxEndpoint = getProperties().getProperty("dynamodb.dax", null);
 
-          Region region = Region.US_EAST_1;
-          String configuredRegion = getProperties().getProperty("dynamodb.region", null);
-          if (configuredRegion != null) {
-            region = Region.of(configuredRegion);
+          if (daxEndpoint != null) {
+            try {
+              this.dynamoDbClient = ClusterDaxClient.builder()
+                  .overrideConfiguration(Configuration.builder()
+                      .url(daxEndpoint)
+                      .build())
+                  .build();
+            } catch (IOException ioe) {
+              throw new DBException(ioe);
+            }
+          } else {
+            DynamoDbClientBuilder dynamoDbClientBuilder = DynamoDbClient.builder();
+
+            Region region = Region.US_EAST_1;
+            String configuredRegion = getProperties().getProperty("dynamodb.region", null);
+            if (configuredRegion != null) {
+              region = Region.of(configuredRegion);
+            }
+            dynamoDbClientBuilder.region(region);
+
+            String configuredEndpoint = getProperties().getProperty("dynamodb.endpoint", null);
+            if (configuredEndpoint != null) {
+              dynamoDbClientBuilder.endpointOverride(URI.create(configuredEndpoint));
+            }
+
+            // we create the same number of HTTP threads as there are YCSB threads. YCSB default is "1"
+            String configuredThreadCount = getProperties().getProperty(Client.THREAD_COUNT_PROPERTY, "1");
+
+            dynamoDbClientBuilder.httpClient(ApacheHttpClient.builder()
+                .maxConnections(Integer.parseInt(configuredThreadCount))
+                .tcpKeepAlive(true)
+                .build());
+            this.dynamoDbClient = dynamoDbClientBuilder.build();
           }
-          dynamoDbClientBuilder.region(region);
-
-          String configuredEndpoint = getProperties().getProperty("dynamodb.endpoint", null);
-          if (configuredEndpoint != null) {
-            dynamoDbClientBuilder.endpointOverride(URI.create(configuredEndpoint));
-          }
-
-          // we create the same number of HTTP threads as there are YCSB threads. YCSB default is "1"
-          String configuredThreadCount = getProperties().getProperty(Client.THREAD_COUNT_PROPERTY, "1");
-
-          dynamoDbClientBuilder.httpClient(ApacheHttpClient.builder()
-              .maxConnections(Integer.parseInt(configuredThreadCount))
-              .tcpKeepAlive(true)
-              .build());
-          this.dynamoDbClient = dynamoDbClientBuilder.build();
         }
       }
     }
